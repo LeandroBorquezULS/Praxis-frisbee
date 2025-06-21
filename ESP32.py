@@ -8,8 +8,8 @@ BUFFER_SIZE = 1024
 
 def crear_socket():
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)  # Reutilización del puerto
-    sock.bind(("", LISTEN_PORT))  # Escucha en todas las interfaces
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.bind(("", LISTEN_PORT))
     return sock
 
 def conectar_ESP(sock):
@@ -25,6 +25,13 @@ def conectar_ESP(sock):
             print(f"[PC] ACK enviado a {addr[0]}:{addr[1]}")
             print("[PC] Conexión establecida. Esperando datos...\n")
             return addr
+        
+def enviar_comando(sock, esp_address, comando):
+    try:
+        sock.sendto(comando.encode(), esp_address)
+        print(f"[PC] Comando enviado: {comando}")
+    except Exception as e:
+        print(f"[ERROR] No se pudo enviar el comando '{comando}': {e}")
 
 
 def escuchar_ESP(sock, esp_address):

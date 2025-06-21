@@ -1,10 +1,8 @@
 import tkinter as tk
 from tkinter import messagebox, simpledialog, scrolledtext
-import socket
 import threading
-import time
 
-import ESP32  # Asume que tu script se guarda como esp_lib.py
+import ESP32
 
 class ESPApp:
     def __init__(self, root):
@@ -18,6 +16,15 @@ class ESPApp:
 
         self.btn_conectar_esp = tk.Button(root, text="Conectar ESP", command=self.conectar_esp)
         self.btn_conectar_esp.pack(pady=5)
+
+        self.btn_calibrar_esp = tk.Button(root, text="Calibrar ESP", command=self.calibrar_esp)
+        self.btn_calibrar_esp.pack(pady=5)
+
+        self.btn_info_esp = tk.Button(root, text="Pedir INFO ESP", command=self.info_esp)
+        self.btn_info_esp.pack(pady=5)
+
+        self.btn_iniciar = tk.Button(root, text="Iniciar Lanzamiento", command=self.iniciar_bucle)
+        self.btn_iniciar.pack(pady=5)
 
         self.btn_escuchar = tk.Button(root, text="Escuchar ESP", command=self.escuchar_esp, state=tk.DISABLED)
         self.btn_escuchar.pack(pady=5)
@@ -56,6 +63,30 @@ class ESPApp:
                 self.actualizar_estado(False)
 
         threading.Thread(target=tarea_conectar, daemon=True).start()
+    
+    def calibrar_esp(self):
+        if not (self.sock and self.esp_addr):
+            messagebox.showwarning("Advertencia", "Debe conectar primero con la ESP.")
+            return
+
+        self.log_mensaje("[PC] Enviando comando de calibración...")
+        ESP32.enviar_comando(self.sock, self.esp_addr, "CALIBRATE")
+
+    def info_esp(self):
+        if not (self.sock and self.esp_addr):
+            messagebox.showwarning("Advertencia", "Debe conectar primero con la ESP.")
+            return
+
+        self.log_mensaje("[PC] Solicitando información del ESP...")
+        ESP32.enviar_comando(self.sock, self.esp_addr, "INFO")
+
+    def iniciar_bucle(self):
+        if not (self.sock and self.esp_addr):
+            messagebox.showwarning("Advertencia", "Debe conectar primero con la ESP.")
+            return
+        self.log_mensaje("[PC] Enviando comando START...")
+        ESP32.enviar_comando(self.sock, self.esp_addr, "START")
+
 
     def escuchar_esp(self):
         if not (self.sock and self.esp_addr):
@@ -72,35 +103,11 @@ class ESPApp:
                         self.log_mensaje(f"[ESP] {msg}")
                     else:
                         self.log_mensaje(f"[IGNORADO] Paquete desde {addr[0]}")
-                except socket.timeout:
-                    self.log_mensaje("[PC] Tiempo de espera agotado. Intentando reconectar...")
-                    self.actualizar_estado(False)
-                    self.btn_escuchar.config(state=tk.DISABLED)
-                    self.reconectar_esp()
-                    break
                 except Exception as e:
                     self.log_mensaje(f"[ERROR] {e}")
                     break
 
         threading.Thread(target=tarea_escuchar, daemon=True).start()
-
-    def reconectar_esp(self):
-        def intento_reconexion():
-            while True:
-                try:
-                    self.log_mensaje("[PC] Buscando reconexión con ESP...")
-                    self.esp_addr = ESP32.conectar_ESP(self.sock)
-                    self.actualizar_estado(True, self.esp_addr[0])
-                    self.log_mensaje(f"[PC] Reconectado a {self.esp_addr[0]}")
-                    self.btn_escuchar.config(state=tk.NORMAL)
-                    self.escuchar_esp()  # Reinicia escucha
-                    break
-                except Exception as e:
-                    self.log_mensaje(f"[PC] Fallo en reconexión: {e}. Reintentando en 5s...")
-                    time.sleep(5)
-
-        threading.Thread(target=intento_reconexion, daemon=True).start()
-
 
     def conectar_wifi(self):
         ssid = simpledialog.askstring("SSID", "Ingrese el nombre de la red WiFi:")
