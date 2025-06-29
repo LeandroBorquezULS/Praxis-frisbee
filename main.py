@@ -1,6 +1,9 @@
 import tkinter as tk
 from tkinter import messagebox, simpledialog, scrolledtext
 import threading
+from datetime import datetime
+import socket
+
 
 import ESP32
 
@@ -10,6 +13,8 @@ class ESPApp:
         self.root.title("Control ESP32")
         self.sock = None
         self.esp_addr = None
+        self.escucha_activa = threading.Event()
+        self.hilo_escucha = None
 
         self.status_label = tk.Label(root, text="Estado: Desconectado", fg="red", font=("Arial", 12))
         self.status_label.pack(pady=10)
@@ -28,6 +33,9 @@ class ESPApp:
 
         self.btn_escuchar = tk.Button(root, text="Escuchar ESP", command=self.escuchar_esp, state=tk.DISABLED)
         self.btn_escuchar.pack(pady=5)
+
+        self.btn_tcp = tk.Button(root, text="Iniciar TCP con ESP", command=self.iniciar_tcp)
+        self.btn_tcp.pack(pady=5)
 
         self.btn_wifi = tk.Button(root, text="Conectar WiFi", command=self.conectar_wifi)
         self.btn_wifi.pack(pady=5)
@@ -87,27 +95,46 @@ class ESPApp:
         self.log_mensaje("[PC] Enviando comando START...")
         ESP32.enviar_comando(self.sock, self.esp_addr, "START")
 
-
     def escuchar_esp(self):
         if not (self.sock and self.esp_addr):
             messagebox.showwarning("Advertencia", "Debe conectar primero con la ESP.")
             return
 
+        if self.hilo_escucha and self.hilo_escucha.is_alive():
+            self.log_mensaje("[PC] Escucha ya está activa.")
+            return
+        
+    def escuchar_esp(self):
+        if not (self.sock and self.esp_addr):
+            messagebox.showwarning("Advertencia", "Debe conectar primero con la ESP.")
+            return
+
+        if self.hilo_escucha and self.hilo_escucha.is_alive():
+            self.log_mensaje("[PC] Escucha ya está activa.")
+            return
+
         def tarea_escuchar():
+            self.escucha_activa.set()
             self.log_mensaje("[PC] Escuchando datos de la ESP...")
-            while True:
+            while self.escucha_activa.is_set():
                 try:
+                    self.sock.settimeout(1.0)
                     data, addr = self.sock.recvfrom(ESP32.BUFFER_SIZE)
                     msg = data.decode(errors="ignore").strip()
                     if addr == self.esp_addr:
                         self.log_mensaje(f"[ESP] {msg}")
                     else:
                         self.log_mensaje(f"[IGNORADO] Paquete desde {addr[0]}")
+                except socket.timeout:
+                    continue
                 except Exception as e:
                     self.log_mensaje(f"[ERROR] {e}")
                     break
+            self.log_mensaje("[PC] Escucha detenida.")
 
-        threading.Thread(target=tarea_escuchar, daemon=True).start()
+        self.hilo_escucha = threading.Thread(target=tarea_escuchar, daemon=True)
+        self.hilo_escucha.start()
+
 
     def conectar_wifi(self):
         ssid = simpledialog.askstring("SSID", "Ingrese el nombre de la red WiFi:")
@@ -122,6 +149,35 @@ class ESPApp:
             threading.Thread(target=tarea_wifi, daemon=True).start()
         else:
             self.log_mensaje("[PC] SSID o contraseña no ingresados.")
+
+    def iniciar_tcp(self):
+        if not self.esp_addr:
+            self.log_mensaje("[PC] IP no disponible.")
+            return
+
+        def tarea_tcp():
+            ip = self.esp_addr[0]  # extraer solo la IP
+            self.log_mensaje(f"[PC] Iniciando conexión TCP a {ip}...")
+            ESP32.enviar_comando(self.sock, self.esp_addr, "DATOS")
+            ESP32.recibir_datos_TCP(ip, log_callback=self.log_mensaje)
+            self.log_mensaje("[PC] Conexión TCP finalizada.")
+
+        threading.Thread(target=tarea_tcp, daemon=True).start()
+
+    def detener_escucha(self):
+        if self.escucha_activa.is_set():
+            self.escucha_activa.clear()
+
+    def log_mensaje(self, mensaje):
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        mensaje = f"[{timestamp}] {mensaje}"
+        self.text_area.config(state=tk.NORMAL)
+        self.text_area.insert(tk.END, mensaje + "\n")
+        self.text_area.see(tk.END)
+        self.text_area.config(state=tk.DISABLED)
+        # También guardar en archivo si lo deseas
+        with open("log_pc.txt", "a") as f:
+            f.write(mensaje + "\n")
 
 if __name__ == "__main__":
     root = tk.Tk()

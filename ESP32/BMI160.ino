@@ -7,10 +7,10 @@
 
 //variables de red
 IPAddress pcIP;
-uint16_t pcPort;
 char ssid[64];
 char password[64];
 const int udpPort = 4210;
+WiFiServer tcpServer(5000);
 bool conectado = false;
 bool iniciado = false;
 
@@ -30,6 +30,7 @@ const float g = 9.8;
 int ax_offset = 0;
 int ay_offset = 0;
 int az_offset = 0;
+bool datosPendientes = false;
 
 
 
@@ -46,6 +47,16 @@ bool receiveWiFiCredentialsOverSerial(String &ssid, String &password);
 void saveWiFiCredentials(const String &ssid, const String &password);
 void setLED(bool on);
 void blinkWhileWaiting();
+
+typedef struct IMUData {
+    float ax, ay, az;
+    float gx, gy, gz;
+    uint32_t timestamp;
+    struct IMUData* next;
+} IMUData;
+
+IMUData* head = NULL;
+IMUData* tail = NULL;
 
 
 void setup() {
@@ -78,6 +89,7 @@ void setup() {
   cargarOffsets();
 
   udp.begin(udpPort);
+  tcpServer.begin();
 
   esperarComandoInicial();  // Aquí se interpreta "CALIBRATE", "INFO", "ACK", etc.
 }
@@ -92,7 +104,6 @@ void loop() {
   float ax_g = (ax_raw - ax_offset) / 2048.0;
   float ay_g = (ay_raw - ay_offset) / 2048.0;
   float az_g = (az_raw - az_offset) / 2048.0;
-
 
   // Calcular aceleración neta
   float net_accel_g = sqrt(ax_g * ax_g + ay_g * ay_g + az_g * az_g);
@@ -112,12 +123,13 @@ void loop() {
         float accel_ms2 = accelSamples[i] * g;
         velocity += accel_ms2 * 0.05;
       }
-      sendInitialSpeed(velocity);
+      String initialVelocity = "Velocidad inicial: " + String(velocity) + "m/s";
+      sendUDPMessage(initialVelocity);
     }
     
   }
   if (lanzamiento){
-    sendRawData(ax_raw, ay_raw, az_raw, gx_raw, gy_raw, gz_raw);
+    addData(ax_g, ay_g, az_g, gx_raw, gy_raw, gz_raw, millis());
     float giro_total = abs(gx_raw) + abs(gy_raw) + abs(gz_raw);
     if (giro_total < 100.0) {
       stationaryCycles++;
@@ -165,7 +177,6 @@ void esperarComandoInicial() {
 
         if (comando == "ACK") {
           pcIP = udp.remoteIP();
-          pcPort = udp.remotePort();
           Serial.println("Conexión establecida.");
           conectado = true;
           setLED(true);
@@ -177,6 +188,12 @@ void esperarComandoInicial() {
           ESP.restart();
         } else if (comando == "START"){
           iniciado = true;
+          if (datosPendientes) {
+            Serial.println("Advertencia: lanzamiento anterior no fue enviado. Datos descartados.");
+            clearData();
+          }
+        } else if (comando == "DATOS"){
+          waitForTCPConnection();
         } else {
           Serial.println("Comando no reconocido: " + comando);
         }
@@ -230,12 +247,6 @@ void calibrarIMU() {
   sendUDPMessage("Calibración completada y guardada.");
 }
 
-void sendRawData(int ax, int ay, int az, int gx, int gy, int gz) {
-  String msg = String(ax - ax_offset) + "," + String(ay - ay_offset) + "," + String(az - az_offset)
-             + "," + String(gx) + "," + String(gy) + "," + String(gz);
-  sendUDPMessage(msg);
-}
-
 void sendPresenceBroadcast() {
   udp.beginPacket("255.255.255.255", udpPort);
   udp.print("ESP_PING");
@@ -271,12 +282,6 @@ bool receiveWiFiCredentialsOverSerial(String &ssid, String &password) {
     password = Serial.readStringUntil('\n');
     password.trim();
     Serial.println("Credenciales guardadas:");
-    /*
-    Serial.print("SSID: ");
-    Serial.println(ssid);
-    Serial.print("Password: ");
-    Serial.println(password);
-    */
 
     return (ssid.length() > 0 && password.length() > 0);
 }
@@ -296,15 +301,8 @@ void saveWiFiCredentials(const String &ssid, const String &password) {
     Serial.println("Credenciales guardadas:");
 }
 
-void sendInitialSpeed(float initial_speed) {
-  udp.beginPacket(pcIP, pcPort);
-  udp.print("Velocidad inicial: ");
-  udp.print(initial_speed);  // en m/s
-  udp.endPacket();
-}
-
 void sendUDPMessage(const String& msg) {
-  udp.beginPacket(pcIP, pcPort);
+  udp.beginPacket(pcIP, udpPort);
   udp.print(msg);
   udp.endPacket();
 }
@@ -354,6 +352,72 @@ void cargarOffsets() {
   Serial.println("az_offset: " + String(az_offset));
 }
 
+void addData(float ax, float ay, float az, float gx, float gy, float gz, uint32_t timestamp) {
+  datosPendientes = true;
+  IMUData* newNode = (IMUData*)malloc(sizeof(IMUData));
+  if (newNode == NULL) {
+      Serial.println("Error: Memoria insuficiente.");
+      return;
+  }
+
+  newNode->ax = ax;
+  newNode->ay = ay;
+  newNode->az = az;
+  newNode->gx = gx;
+  newNode->gy = gy;
+  newNode->gz = gz;
+  newNode->timestamp = timestamp;
+  newNode->next = NULL;
+
+  if (head == NULL) {
+      head = tail = newNode;
+  } else {
+      tail->next = newNode;
+      tail = newNode;
+  }
+}
+
+void sendAndClearData(WiFiClient& client) {
+  
+  datosPendientes = false;
+  IMUData* current = head;
+  while (current != NULL) {
+      client.printf("t=%lu, acc=(%.2f, %.2f, %.2f), gyr=(%.2f, %.2f, %.2f)\n",
+          current->timestamp, current->ax, current->ay, current->az,
+          current->gx, current->gy, current->gz);
+
+      IMUData* next = current->next;
+      free(current);
+      current = next;
+      delay(10);
+  }
+
+  head = tail = NULL;
+}
 
 
+void clearData() {
+  datosPendientes = false;
+  IMUData* current = head;
+  while (current != NULL) {
+      IMUData* next = current->next;
+      free(current);
+      current = next;
+  }
+  head = tail = NULL;
+}
 
+void waitForTCPConnection(){
+  
+  bool TCPConect = false;
+  while(!TCPConect){
+    WiFiClient client = tcpServer.available();
+    if (client) {
+      Serial.println("Cliente conectado. Enviando datos almacenados...");
+      sendAndClearData(client);
+      client.stop();
+      Serial.println("Datos enviados. Cliente desconectado.");
+      TCPConect = true;
+    }
+  }
+}

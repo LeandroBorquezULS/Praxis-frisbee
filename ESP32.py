@@ -2,6 +2,9 @@ import serial
 import time
 import socket
 from serial.tools import list_ports
+import os
+import re
+
 
 LISTEN_PORT = 4210  # Puerto en el que escucha el PC para todo
 BUFFER_SIZE = 1024
@@ -91,6 +94,56 @@ def enviar_credenciales(puerto, ssid, password, baudios=115200):
 
     except serial.SerialException as e:
         print(f"Error de conexión: {e}")
+    
+def recibir_datos_TCP(ip, puerto=5000, archivo_base='imu_data.csv', log_callback=print):
+    def generar_nombre_archivo(base):
+        nombre, ext = os.path.splitext(base)
+        contador = 1
+        nuevo_nombre = base
+        while os.path.exists(nuevo_nombre):
+            nuevo_nombre = f"{nombre}({contador}){ext}"
+            contador += 1
+        return nuevo_nombre
+
+    archivo = generar_nombre_archivo(archivo_base)
+
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.connect((ip, puerto))
+            log_callback(f"[TCP] Conectado a {ip}:{puerto}")
+            log_callback(f"[TCP] Guardando en archivo: {archivo}")
+
+            with open(archivo, 'w', newline='') as f:
+                f.write('timestamp,ax,ay,az,gx,gy,gz\n')
+                buffer = ""
+
+                while True:
+                    data = s.recv(BUFFER_SIZE)
+                    if not data:
+                        break
+
+                    buffer += data.decode(errors="ignore")
+
+                    while '\n' in buffer:
+                        line, buffer = buffer.split('\n', 1)
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            match = re.match(r"t=(\d+), acc=\((-?\d+\.\d+), (-?\d+\.\d+), (-?\d+\.\d+)\), gyr=\((-?\d+\.\d+), (-?\d+\.\d+), (-?\d+\.\d+)\)", line)
+                            if match:
+                                timestamp, ax, ay, az, gx, gy, gz = match.groups()
+                                csv_line = f"{timestamp},{ax},{ay},{az},{gx},{gy},{gz}\n"
+                                f.write(csv_line)
+                                log_callback(f"[CSV] {csv_line.strip()}")
+                            else:
+                                raise ValueError("Formato no coincide")
+                        except Exception as e:
+                            log_callback(f"[TCP] Formato inválido: {line} ({e})")
+    except Exception as e:
+        log_callback(f"[TCP] Error de conexión: {e}")
+
+
 
 if __name__ == "__main__":
     sock = crear_socket()
