@@ -106,13 +106,11 @@ void loop() {
   float az_g = (az_raw - az_offset) / 2048.0;
 
   // Calcular aceleración neta
-  float net_accel_g = sqrt(ax_g * ax_g + ay_g * ay_g + az_g * az_g);
+  float net_accel_g = sqrt(ax_g * ax_g + ay_g * ay_g);
 
   // Verificar si la aceleración neta supera el umbral
   if (net_accel_g > 2.0 && !lanzamiento || sampleIndex > 0) {
-    float horizontalAccelSq = (net_accel_g * net_accel_g) - 1;
-    float orizontal_accel_g = (horizontalAccelSq > 0) ? sqrt(horizontalAccelSq) : 0;
-    accelSamples[sampleIndex] = orizontal_accel_g;
+    accelSamples[sampleIndex] = net_accel_g;
     sampleIndex++;
     lanzamiento = true;
     if (sampleIndex > 10){
